@@ -9,11 +9,22 @@ class ProtocolApp:
         self.log_text = tk.Text(self.root, height=30, width=100)
         self.log_text.pack()
 
-        self.device = Device(self.log, "d1", "1234")
+        self.device = None  # Device object will be created after registration
         self.server = Server(self.log, "Server_001", "supersecretkey12")
 
         self.step_label = tk.Label(self.root, text="Step: Initialize", font=("Arial", 14))
         self.step_label.pack()
+
+        # Input fields for registration parameters
+        self.reg_id_label = tk.Label(self.root, text="Registration ID:")
+        self.reg_id_label.pack()
+        self.reg_id_entry = tk.Entry(self.root, width=30)
+        self.reg_id_entry.pack()
+
+        self.reg_password_label = tk.Label(self.root, text="Registration Password:")
+        self.reg_password_label.pack()
+        self.reg_password_entry = tk.Entry(self.root, show="*", width=30)  # Password hidden
+        self.reg_password_entry.pack()
 
         # Input fields for authentication parameters
         self.auth_id_label = tk.Label(self.root, text="Authentication ID:")
@@ -45,7 +56,18 @@ class ProtocolApp:
         self.step_label.config(text="Step: Device Registration")
         self.log("[Protocol] Starting Device Registration...")
 
+        # Retrieve input values for registration
+        reg_id = self.reg_id_entry.get()
+        reg_password = self.reg_password_entry.get()
+
+        if not reg_id or not reg_password:
+            self.log("[Error] Both Registration ID and Password must be provided.")
+            return
+
         try:
+            # Create a new device object
+            self.device = Device(self.log, reg_id, reg_password)
+
             # Step 1: Device generates an identifier
             identifier = self.device.generate_identifier()
             self.log(f"[Device] Identifier I_i generated: {identifier}")

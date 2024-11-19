@@ -38,33 +38,27 @@ class Server:
         # Step 3: Compute Pid_i
         pid_i_hash_input = f"{i_i}{self.server_id}{r_cs.hex()}".encode('utf-8')
         pid_i_hash = hashlib.sha256(pid_i_hash_input).digest()
-        server_id_bytes = self.server_id.encode('utf-8')  # Convert server_id to bytes
+        server_id_bytes = self.server_id.encode('utf-8')  
 
-        # XOR Pid_i with the server ID
         pid_i = bytes(a ^ b for a, b in zip(pid_i_hash, server_id_bytes))
         self.logger(f"[Server] Computed Pid_i: {pid_i.hex()}")
 
         # Step 4: Compute C_k
         current_time = int(time.time())
-        validity_period = 3600  # 1 hour validity
+        validity_period = 3600 
         et = current_time + validity_period
         self.logger(f"[Server] Computed expiration time (Et): {et} (UNIX timestamp)")
         c_k_hash_input = f"{self.master_key}{pid_i.hex()}{et}{r_cs.hex()}".encode('utf-8')
         c_k = hashlib.sha256(c_k_hash_input).digest()
 
-        # XOR C_k with server_id (Id_cs)
         server_id_bytes = self.server_id.encode('utf-8')  # Convert server_id to bytes
         c_k_xor = bytes(a ^ b for a, b in zip(c_k, server_id_bytes))
         self.logger(f"[Server] Computed C_k (after XOR with Id_cs): {c_k_xor.hex()}")
         self.ck = c_k_xor
-        # Compute C'_k by XORing with I_i
         c_prime_k = bytes(a ^ b for a, b in zip(c_k_xor, bytes.fromhex(i_i)))
         self.logger(f"[Server] Computed C'_k: {c_prime_k.hex()}")
 
-        # Step 5: Compute A'_i (anonymized authentication value)
         a_i_data = f"{pid_i.hex()}{et}".encode('utf-8')    
-
-        # Encrypt A_i
         padder = padding.PKCS7(128).padder()
         padded_a_i_data = padder.update(a_i_data) + padder.finalize()
 
@@ -75,8 +69,7 @@ class Server:
         a_prime_i = bytes(a ^ b for a, b in zip(a_i, bytes.fromhex(i_i)))
         self.logger(f"[Server] Computed A'_i: {a_prime_i.hex()}")
 
-        # Step 6: Compute R'_i
-        r_i_hash_input = f"{self.master_key}{pid_i.hex()}".encode('utf-8')  # X_cs || Pid_i
+        r_i_hash_input = f"{self.master_key}{pid_i.hex()}".encode('utf-8')
         r_i_hash = hashlib.sha256(r_i_hash_input).digest()
         r_i = bytes(a ^ b for a, b in zip(r_cs, r_i_hash))
         self.logger(f"[Server] Computed R_i: {r_i.hex()}")
@@ -84,7 +77,6 @@ class Server:
         r_prime_i = bytes(a ^ b for a, b in zip(r_i, bytes.fromhex(i_i)))
         self.logger(f"[Server] Computed R'_i: {r_prime_i.hex()}")
 
-        # Step 7: Store {R_i, Et, Pid_i} securely in the database
         self.database[pid_i.hex()] = {
             "R_i": r_i,
             "Et": et,
@@ -94,7 +86,6 @@ class Server:
         }
         self.logger(f"[Server] Stored registration data for Pid_i: {pid_i.hex()}")
 
-        # Return {Pid_i, A'_i, R'_i, C'_k} to the device
         return pid_i.hex(), a_prime_i, r_prime_i, c_prime_k
 
 
@@ -118,17 +109,17 @@ class Server:
             self.logger("[Server] Authentication failed: T1 is not fresh.")
             return None
 
-        # Step 3: Compute \( C_k \)
+        # Step 3: Compute C_k
         r_cs = self.database[identifier]["Random_Value"]
         c_k_hash_input = f"{self.master_key}{Pid_i_stored}{Et_stored}{r_cs.hex()}".encode('utf-8')
         C_k = hashlib.sha256(c_k_hash_input).digest()
         self.logger(f"[Server] Computed C_k: {C_k.hex()}")
 
-        if len(C_k) < 16:  # Ensure valid AES key length
+        if len(C_k) < 16:
             C_k = hashlib.sha256(C_k).digest()[:16]
             self.logger(f"[Server] Adjusted C_k for AES compatibility: {C_k.hex()}")
 
-        # Step 4: Validate \( E_i \)
+        # Step 4: Validate E_i
         cipher = Cipher(algorithms.AES(C_k), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()
         try:
@@ -140,31 +131,31 @@ class Server:
             self.logger(f"[Server] Failed to decrypt E_i: {e}")
             return None
 
-        # Step 5: Extract components from \( E_i \)
-        extracted_e_i = decrypted_ei[:16]  # First 16 bytes
-        extracted_T1 = int(decrypted_ei[16:32].decode('utf-8'))  # Next 16 bytes as integer
-        extracted_A_i = decrypted_ei[32:]  # Remaining bytes
+        # Step 5: Extract components from E_i
+        extracted_e_i = decrypted_ei[:16]  
+        extracted_T1 = int(decrypted_ei[16:32].decode('utf-8'))  
+        extracted_A_i = decrypted_ei[32:] 
         self.logger(f"[Server] Extracted e_i: {extracted_e_i.hex()}, T1: {extracted_T1}, A*_i: {extracted_A_i.hex()}")
 
-        # Step 6: Validate \( A^*_i \)
-        A_prime_i = extracted_A_i  # Assuming \( A^*_i \) is provided directly
-        Pid_star = Pid_i_stored  # Stored \( Pid_i \)
-        Et_star = Et_stored  # Stored \( Et \)
+        # Step 6: Validate A*_i 
+        A_prime_i = extracted_A_i
+        Pid_star = Pid_i_stored
+        Et_star = Et_stored
         self.logger(f"[Server] Extracted Pid*: {Pid_star}, Et*: {Et_star}")
 
-        # Check \( Et^* \) for expiration
+        # Check Et* for expiration
         if int(Et_star) < current_time:
             self.logger("[Server] Validation failed: Et* has expired.")
             return None
 
         # Step 7: Compute response {T_i, T2}
         T2 = int(time.time())
-        qi = os.urandom(16)  # Generate random \( q_i \)
+        qi = os.urandom(16)
         Qi = hashlib.sha256(f"{C_k.hex()}{qi.hex()}".encode()).digest()
-        si = bytes(a ^ b for a, b in zip(qi, C_k))  # XOR operation
+        si = bytes(a ^ b for a, b in zip(qi, C_k))
         wi = hashlib.sha256(f"{Pid_star}{extracted_e_i.hex()}".encode()).digest()
 
-        # Store \( Q_i \) in the database
+        # Store Q_i in the database
         self.database[identifier]["Qi"] = Qi
         self.logger(f"[Server] Stored Qi: {Qi.hex()} in database for identifier {identifier}")
 
