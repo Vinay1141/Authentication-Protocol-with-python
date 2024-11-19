@@ -5,42 +5,44 @@ from server import Server
 class ProtocolApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Authentication Protocol")
-        self.log_text = tk.Text(self.root, height=30, width=100)
+        self.root.title("IoT Authentication Protocol")
+        self.log_text = tk.Text(self.root, height=30, width=240)
         self.log_text.pack()
 
-        self.device = None  # Device object will be created after registration
-        self.server = Server(self.log, "Server_001", "supersecretkey12")
+        # Device and Server Instances
+        self.server = Server(self.log, "cloudserver_id_1", "supersecretkey12")
+        self.device = None  # Device will be initialized during registration
 
+        # Step Indicator
         self.step_label = tk.Label(self.root, text="Step: Initialize", font=("Arial", 14))
         self.step_label.pack()
 
-        # Input fields for registration parameters
-        self.reg_id_label = tk.Label(self.root, text="Registration ID:")
-        self.reg_id_label.pack()
-        self.reg_id_entry = tk.Entry(self.root, width=30)
-        self.reg_id_entry.pack()
+        # Input fields for Registration
+        self.register_id_label = tk.Label(self.root, text="Device ID:")
+        self.register_id_label.pack()
+        self.register_id_entry = tk.Entry(self.root, width=30)
+        self.register_id_entry.pack()
 
-        self.reg_password_label = tk.Label(self.root, text="Registration Password:")
-        self.reg_password_label.pack()
-        self.reg_password_entry = tk.Entry(self.root, show="*", width=30)  # Password hidden
-        self.reg_password_entry.pack()
-
-        # Input fields for authentication parameters
-        self.auth_id_label = tk.Label(self.root, text="Authentication ID:")
-        self.auth_id_label.pack()
-        self.auth_id_entry = tk.Entry(self.root, width=30)
-        self.auth_id_entry.pack()
-
-        self.auth_password_label = tk.Label(self.root, text="Authentication Password:")
-        self.auth_password_label.pack()
-        self.auth_password_entry = tk.Entry(self.root, show="*", width=30)  # Password hidden
-        self.auth_password_entry.pack()
+        self.register_password_label = tk.Label(self.root, text="Password:")
+        self.register_password_label.pack()
+        self.register_password_entry = tk.Entry(self.root, show="*", width=30)
+        self.register_password_entry.pack()
 
         self.register_button = tk.Button(
             self.root, text="Register Device", command=self.register_device, state=tk.NORMAL
         )
         self.register_button.pack(pady=10)
+
+        # Input fields for Authentication
+        self.auth_id_label = tk.Label(self.root, text="Device ID (Authentication):")
+        self.auth_id_label.pack()
+        self.auth_id_entry = tk.Entry(self.root, width=30)
+        self.auth_id_entry.pack()
+
+        self.auth_password_label = tk.Label(self.root, text="Password (Authentication):")
+        self.auth_password_label.pack()
+        self.auth_password_entry = tk.Entry(self.root, show="*", width=30)
+        self.auth_password_entry.pack()
 
         self.authenticate_button = tk.Button(
             self.root, text="Authenticate Device", command=self.authenticate_device, state=tk.DISABLED
@@ -48,46 +50,34 @@ class ProtocolApp:
         self.authenticate_button.pack(pady=10)
 
     def log(self, message):
-        """Log messages to the GUI."""
+        """Logs messages to the GUI."""
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
 
     def register_device(self):
-        self.step_label.config(text="Step: Device Registration")
-        self.log("[Protocol] Starting Device Registration...")
+        """Handles device registration."""
+        device_id = self.register_id_entry.get()
+        password = self.register_password_entry.get()
 
-        # Retrieve input values for registration
-        reg_id = self.reg_id_entry.get()
-        reg_password = self.reg_password_entry.get()
-
-        if not reg_id or not reg_password:
-            self.log("[Error] Both Registration ID and Password must be provided.")
+        if not device_id or not password:
+            self.log("[Error] Both Device ID and Password are required for registration.")
             return
 
-        try:
-            # Create a new device object
-            self.device = Device(self.log, reg_id, reg_password)
+        self.log("[Protocol] Starting Device Registration...")
+        self.device = Device(self.log, device_id, password)
 
-            # Step 1: Device generates an identifier
-            identifier = self.device.generate_identifier()
-            self.log(f"[Device] Identifier I_i generated: {identifier}")
+        # Device generates identifier
+        I_i = self.device.generate_identifier()
+        self.log(f"[Device] Generated Identifier: {I_i}")
 
-            # Step 2: Server processes registration request
-            pid_i, a_prime_i, r_prime_i, c_prime_k = self.server.register_device(identifier)
-            self.log("[Server] Registration request processed. Returning data to device.")
+        # Server processes registration
+        Ii, Pid_i, A_prime_i, R_prime_i, C_k = self.server.register_device(I_i)
+        self.device.store_registration_data(Pid_i, A_prime_i, R_prime_i, C_k)
+        self.log("[Device] Registration completed. Device data stored successfully.")
 
-            # Step 3: Device stores registration data
-            self.device.store_registration_data(pid_i, a_prime_i, r_prime_i, c_prime_k)
-            session_key = self.server.database[pid_i]['Session_Key']  # Retrieve session key
-            self.device.set_session_key(session_key)
-            self.log(f"[Device] Session key set: {session_key.hex()}")
-            self.log("[Device] Registration data stored successfully.")
-
-            # Enable the "Authenticate Device" button
-            self.authenticate_button.config(state=tk.NORMAL)
-            self.log("[Protocol] Registration completed. Ready for authentication.")
-        except Exception as e:
-            self.log(f"[Error] Registration failed: {e}")
+        # Enable authentication button
+        self.authenticate_button.config(state=tk.NORMAL)
+        self.log("[Protocol] Registration phase complete. Ready for authentication.")
 
     def authenticate_device(self):
         self.step_label.config(text="Step: Device Authentication")
@@ -108,8 +98,9 @@ class ProtocolApp:
             self.log(f"[Device] Sent authentication request with T1: {T1} and IV: {iv.hex()}")
 
             # Step 2: Server processes the authentication request
-            pid_i = self.device.stored_data['Pid_i']
-            response = self.server.process_auth_request(pid_i, Ni, T1, Ei, iv)
+            device_public_key = self.device.ecc_public_key
+            response = self.server.process_auth_request(device_public_key, Ni, T1, Ei, iv)
+            self.log(f"[Protocol] {response}")
             if not response:
                 self.log("[Server] Authentication failed during T1 validation.")
                 return
@@ -118,15 +109,22 @@ class ProtocolApp:
             Ti, T2, response_iv = response
             self.log(f"[Server] Sent response T2: {T2} with IV: {response_iv.hex()}")
 
-            auth_status = self.device.process_server_response(Ti, T2, response_iv)
-            if auth_status:
-                self.log("[Protocol] Authentication Successful!")
+            MN_i, Pid_i, T3 = self.device.process_server_response(Ti, T2, response_iv)
+            if MN_i:
+                self.log(f"[Protocol] MN_i: {MN_i.hex()} Pid_i: {Pid_i.hex()}")
+                
+                auth_results = self.server.final_check(MN_i, Pid_i, T3)
+                if auth_results:
+                    self.log(f"[Protocol] Authentication successful for device {self.device.device_id}")
+
             else:
                 self.log("[Protocol] Authentication Failed!")
         except Exception as e:
             self.log(f"[Error] Authentication failed: {e}")
 
+
     def run(self):
+        """Runs the Tkinter app."""
         self.root.mainloop()
 
 
