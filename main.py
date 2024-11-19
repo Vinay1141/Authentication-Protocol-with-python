@@ -2,7 +2,6 @@ import tkinter as tk
 from device import Device
 from server import Server
 
-
 class ProtocolApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -15,6 +14,17 @@ class ProtocolApp:
 
         self.step_label = tk.Label(self.root, text="Step: Initialize", font=("Arial", 14))
         self.step_label.pack()
+
+        # Input fields for authentication parameters
+        self.auth_id_label = tk.Label(self.root, text="Authentication ID:")
+        self.auth_id_label.pack()
+        self.auth_id_entry = tk.Entry(self.root, width=30)
+        self.auth_id_entry.pack()
+
+        self.auth_password_label = tk.Label(self.root, text="Authentication Password:")
+        self.auth_password_label.pack()
+        self.auth_password_entry = tk.Entry(self.root, show="*", width=30)  # Password hidden
+        self.auth_password_entry.pack()
 
         self.register_button = tk.Button(
             self.root, text="Register Device", command=self.register_device, state=tk.NORMAL
@@ -55,32 +65,44 @@ class ProtocolApp:
             self.authenticate_button.config(state=tk.NORMAL)
             self.log("[Protocol] Registration completed. Ready for authentication.")
         except Exception as e:
-            self.log(e)
             self.log(f"[Error] Registration failed: {e}")
 
     def authenticate_device(self):
         self.step_label.config(text="Step: Device Authentication")
         self.log("[Protocol] Starting Device Authentication...")
 
-        # Step 1: Device generates T1 and sends it to the server
-        Ni, T1, Ei, iv = self.device.start_authentication()
-        self.log(f"[Device] Sent encrypted T1: {T1} with IV: {iv.hex()}")
-        self.log(f"Device Identifier: {self.device.stored_data['Pid_i']}")
-        # Step 2: Server processes T1 and responds with T2
-        response = self.server.process_auth_request(self.device.stored_data['Pid_i'], Ni, T1, Ei, iv)
-        if not response:
-            self.log("[Server] Authentication failed during T1 validation.")
+        # Retrieve input values
+        auth_id = self.auth_id_entry.get()
+        auth_password = self.auth_password_entry.get()
+
+        if not auth_id or not auth_password:
+            self.log("[Error] Both Authentication ID and Password must be provided.")
             return
 
-        S_i, R_e, response_iv = response
-        self.log(f"[Server] Sent encrypted T2: {encrypted_T2.hex()} with IV: {response_iv.hex()}")
+        try:
+            # Step 1: Device starts authentication
+            server_public_key = self.server.ecc_public_key
+            Ni, T1, Ei, iv = self.device.start_authentication(server_public_key, auth_id, auth_password)
+            self.log(f"[Device] Sent authentication request with T1: {T1} and IV: {iv.hex()}")
 
-        # Step 3: Device processes T2 and completes authentication
-        auth_status = self.device.process_server_response(encrypted_T2, response_iv)
-        if auth_status:
-            self.log("[Protocol] Authentication Successful!")
-        else:
-            self.log("[Protocol] Authentication Failed!")
+            # Step 2: Server processes the authentication request
+            pid_i = self.device.stored_data['Pid_i']
+            response = self.server.process_auth_request(pid_i, Ni, T1, Ei, iv)
+            if not response:
+                self.log("[Server] Authentication failed during T1 validation.")
+                return
+
+            # Step 3: Device processes the server's response
+            T2, response_iv, encrypted_response = response
+            self.log(f"[Server] Sent response T2: {T2} with IV: {response_iv.hex()}")
+
+            auth_status = self.device.process_server_response(encrypted_response, response_iv)
+            if auth_status:
+                self.log("[Protocol] Authentication Successful!")
+            else:
+                self.log("[Protocol] Authentication Failed!")
+        except Exception as e:
+            self.log(f"[Error] Authentication failed: {e}")
 
     def run(self):
         self.root.mainloop()

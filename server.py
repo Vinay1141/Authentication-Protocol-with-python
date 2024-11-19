@@ -5,6 +5,9 @@ import hashlib
 import hmac
 import os
 import time
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+
 
 
 class Server:
@@ -15,142 +18,156 @@ class Server:
         self.logger = logger
         self.logger("[Server] Server initialized with ID and master key.")
 
+        self.ecc_private_key = ec.generate_private_key(ec.SECP256R1())
+        self.ecc_public_key = self.ecc_private_key.public_key()
+        self.logger("[Server] ECC key pair generated.")
+
     def register_device(self, i_i):
-        # Generate a random number r_cs
+        """
+        Registers a device by computing and sharing necessary parameters with it.
+        """
+        # Step 1: Generate a random number r_cs
         r_cs = os.urandom(16)
         self.logger(f"[Server] Generated random number r_cs: {r_cs.hex()}")
 
+        # Step 2: Compute session key (not shared with the device)
         session_key = hashlib.sha256(f"{i_i}{r_cs.hex()}".encode('utf-8')).digest()
         self.logger(f"[Server] Computed session key: {session_key.hex()}")
-        # Compute Pid_i
-        pid_i_hash_input = f"{i_i}{self.server_id}{r_cs.hex()}".encode('utf-8')
-        pid_i = hashlib.sha256(pid_i_hash_input).hexdigest()
-        pid_i_xor = bytes.fromhex(pid_i)[:16]  # XOR only uses first 16 bytes
-        self.logger(f"[Server] Computed Pid_i: {pid_i_xor.hex()}")
 
-        # Compute other values (A'_i, R'_i, C'_k)
+        # Step 3: Compute Pid_i
+        pid_i_hash_input = f"{i_i}{self.server_id}{r_cs.hex()}".encode('utf-8')
+        pid_i_hash = hashlib.sha256(pid_i_hash_input).digest()
+        server_id_bytes = self.server_id.encode('utf-8')  # Convert server_id to bytes
+
+        # XOR Pid_i with the server ID
+        pid_i = bytes(a ^ b for a, b in zip(pid_i_hash, server_id_bytes))
+        self.logger(f"[Server] Computed Pid_i: {pid_i.hex()}")
+
+        # Step 4: Compute C_k
         et = "server-specific-time".encode('utf-8')
-        c_k_hash_input = f"{self.master_key}{pid_i}{et.decode()}{r_cs.hex()}".encode('utf-8')
+        c_k_hash_input = f"{self.master_key}{pid_i.hex()}{et.decode()}{r_cs.hex()}".encode('utf-8')
         c_k = hashlib.sha256(c_k_hash_input).digest()
-        c_prime_k = bytes(a ^ b for a, b in zip(c_k[:16], bytes.fromhex(i_i)[:16]))
+
+        # XOR C_k with server_id (Id_cs)
+        server_id_bytes = self.server_id.encode('utf-8')  # Convert server_id to bytes
+        c_k_xor = bytes(a ^ b for a, b in zip(c_k, server_id_bytes))
+        self.logger(f"[Server] Computed C_k (after XOR with Id_cs): {c_k_xor.hex()}")
+
+        # Compute C'_k by XORing with I_i
+        c_prime_k = bytes(a ^ b for a, b in zip(c_k_xor, bytes.fromhex(i_i)))
         self.logger(f"[Server] Computed C'_k: {c_prime_k.hex()}")
 
-        a_i_data = f"{pid_i}{et.decode()}".encode('utf-8')
+        # Step 5: Compute A'_i (anonymized authentication value)
+        a_i_data = f"{pid_i.hex()}{et.decode()}".encode('utf-8')    
 
-        # Pad the data to a multiple of the block size
+        # Encrypt A_i
         padder = padding.PKCS7(128).padder()
         padded_a_i_data = padder.update(a_i_data) + padder.finalize()
 
-        # Encrypt the padded data
         cipher = Cipher(algorithms.AES(self.master_key.encode('utf-8')), modes.ECB())
         encryptor = cipher.encryptor()
         a_i = encryptor.update(padded_a_i_data) + encryptor.finalize()
-        a_prime_i = bytes(a ^ b for a, b in zip(a_i[:16], bytes.fromhex(i_i)[:16]))
+
+        a_prime_i = bytes(a ^ b for a, b in zip(a_i, bytes.fromhex(i_i)))
         self.logger(f"[Server] Computed A'_i: {a_prime_i.hex()}")
-        self.logger(f"[Server] r_cs during registration: {r_cs.hex()}")
-        self.logger(f"[Server] SHA-256 hash of Pid_i: {hashlib.sha256(pid_i.encode('utf-8')).hexdigest()}")
-        r_i = bytes(a ^ b for a, b in zip(r_cs, hashlib.sha256(pid_i.encode('utf-8')).digest()[:16]))
-        self.logger(f"[Server] Computed R_i during registration: {r_i.hex()}")
-        r_prime_i = bytes(a ^ b for a, b in zip(r_i[:16], bytes.fromhex(i_i)[:16]))
-        self.logger(f"[Server] Sent R'_i to device: {r_prime_i.hex()}")
-        # self.logger(f"[Server] R_i stored during registration: {r_i.hex()}")
-        # Store {R_i, Et, Pid_i} in the database
-        self.database[pid_i] = {
+
+        # Step 6: Compute R'_i
+        r_i_hash_input = f"{self.master_key}{pid_i.hex()}".encode('utf-8')  # X_cs || Pid_i
+        r_i_hash = hashlib.sha256(r_i_hash_input).digest()
+        r_i = bytes(a ^ b for a, b in zip(r_cs, r_i_hash))
+        self.logger(f"[Server] Computed R_i: {r_i.hex()}")
+
+        r_prime_i = bytes(a ^ b for a, b in zip(r_i, bytes.fromhex(i_i)))
+        self.logger(f"[Server] Computed R'_i: {r_prime_i.hex()}")
+
+        # Step 7: Store {R_i, Et, Pid_i} securely in the database
+        self.database[pid_i.hex()] = {
             "R_i": r_i,
             "Et": et,
-            "Pid_i": pid_i,
+            "Pid_i": pid_i.hex(),
             "Session_Key": session_key,
-            "Random_Value": r_cs
+            "Random_Value": r_cs,
         }
-        self.logger(f"[Server] Stored registration data for Pid_i: {pid_i}")
+        self.logger(f"[Server] Stored registration data for Pid_i: {pid_i.hex()}")
 
-        return pid_i, a_prime_i, r_prime_i, c_prime_k
+        # Return {Pid_i, A'_i, R'_i, C'_k} to the device
+        return pid_i.hex(), a_prime_i, r_prime_i, c_prime_k
 
-    # def authenticate_device(self, device_id, iv, encrypted_message, tag):
-    #     if device_id not in self.registered_devices:
-    #         self.logger("[Server] Authentication failed: Device not registered.")
-    #         return False
 
-    #     session_key = self.registered_devices[device_id]
-    #     self.logger(f"[Server] Retrieved session key for device {device_id}: {session_key.hex()}")
-
-    #     # Verify HMAC for message integrity
-    #     expected_tag = hmac.new(session_key, encrypted_message, hashlib.sha256).digest()
-    #     self.logger(f"[Server] Calculated expected HMAC tag: {expected_tag.hex()}")
-    #     if not hmac.compare_digest(tag, expected_tag):
-    #         self.logger("[Server] HMAC verification failed.")
-    #         return False
-
-    #     # Decrypt the encrypted message (timestamp)
-    #     cipher = Cipher(algorithms.AES(session_key), modes.CBC(iv), backend=default_backend())
-    #     decryptor = cipher.decryptor()
-    #     padded_timestamp = decryptor.update(encrypted_message) + decryptor.finalize()
-    #     self.logger(f"[Server] Decrypted padded timestamp: {padded_timestamp.hex()}")
-
-    #     # Unpad the decrypted timestamp
-    #     unpadder = padding.PKCS7(128).unpadder()
-    #     timestamp = unpadder.update(padded_timestamp) + unpadder.finalize()
-    #     self.logger(f"[Server] Unpadded timestamp: {timestamp.hex()}")
-
-    #     # Simulated check for timestamp validity
-    #     self.logger("[Server] Authentication successful.")
-    #     return True
-
-    def process_auth_request(self, identifier, N_i, T_i, E_i, iv):
-        """Step 2: Validate E_i, compute S_i, and respond."""
-        self.logger(f"[Server] Received E_i: {E_i.hex()}")
-        self.logger(f"[Server] Database: {self.database}")
+    def process_auth_request(self, identifier, Ni, T1, Ei, iv):
+        self.logger(f"[Server] database: {self.database}")
+        """Step 2: Process the authentication request."""
         if identifier not in self.database:
             self.logger("[Server] Authentication failed: Device not registered.")
             return None
 
-        # Retrieve session key, R_i, and A_i
+        # Retrieve stored data
         session_key = self.database[identifier]["Session_Key"]
-        R_i = self.database[identifier]["R_i"]
+        R_i_stored = self.database[identifier]["R_i"]
+        Pid_i_stored = self.database[identifier]["Pid_i"]
+        r_cs = self.database[identifier]["Random_Value"]
 
-        self.logger(f"[Server] Received N_i: {N_i.hex()}")
-        self.logger(f"[Server] Received T_i: {T_i}")
+        # Log received plaintext values
+        self.logger(f"[Server] Received Ni: {Ni.hex()}, T1: {T1}, Ei: {Ei.hex()}")
 
-        if T_i <= time.time() - 60:
-            self.logger("[Server] T_i is invalid (stale timestamp). Authentication failed.")
-            return None
+        # ECC Operation on N_i
+        N_i_point = ec.EllipticCurvePublicNumbers.from_encoded_point(
+            ec.SECP256R1(), Ni
+        ).public_key(default_backend())
+        ECC_shared = self.ecc_private_key.exchange(ec.ECDH(), N_i_point)
+        self.logger(f"[Server] ECC shared secret derived: {ECC_shared.hex()}")
 
-        # Decrypt E_i
-        cipher = Cipher(algorithms.AES(session_key), modes.CBC(iv), backend=default_backend())
+        # Use ECC shared secret to derive Pid_i and Ri
+        Pid_i = hashlib.sha256(f"{ECC_shared.hex()}{r_cs.hex()}".encode('utf-8')).hexdigest()
+        Ri = bytes(a ^ b for a, b in zip(bytes.fromhex(Pid_i), r_cs))
+        self.logger(f"[Server] Computed Pid_i: {Pid_i}, Ri: {Ri.hex()}")
+
+        # Step 2: Compute r_cs and Ck
+        r_cs_recomputed = bytes(a ^ b for a, b in zip(Ri, hashlib.sha256(f"{session_key.hex()}{Pid_i}".encode()).digest()))
+        self.logger(f"[Server] Recomputed r_cs: {r_cs_recomputed.hex()}")
+        Ck = hashlib.sha256(f"{session_key.hex()}{Pid_i}{r_cs_recomputed.hex()}".encode()).digest()
+        self.logger(f"[Server] Computed session key Ck: {Ck.hex()}")
+
+        # Step 3: Decrypt Ei to extract e_i, T1, and A_i
+        cipher = Cipher(algorithms.AES(Ck), modes.CBC(bytes(16)), backend=default_backend())
         decryptor = cipher.decryptor()
-        padded_data = decryptor.update(E_i) + decryptor.finalize()
+        padded_ei = decryptor.update(Ei) + decryptor.finalize()
 
         unpadder = padding.PKCS7(128).unpadder()
-        data = unpadder.update(padded_data) + unpadder.finalize()
+        decrypted_ei = unpadder.update(padded_ei) + unpadder.finalize()
+        self.logger(f"[Server] Decrypted E_i: {decrypted_ei.hex()}")
 
-        self.logger(f"[Server] data: {data}")
+        # Extract A_i, R_i, N_i, and T_i from decrypted data
+        extracted_e_i = decrypted_ei[:16]
+        extracted_T1 = int(decrypted_ei[16:32].decode())
+        extracted_A_i = decrypted_ei[32:]
+        self.logger(f"[Server] Extracted e_i: {extracted_e_i.hex()}, T1: {extracted_T1}, A_i: {extracted_A_i.hex()}")
 
-        received_A_i = bytes.fromhex(data[:32].decode('utf-8'))
-        received_R_i = bytes.fromhex(data[32:64].decode('utf-8'))
-        self.logger(f"[Server] Expected R_i: {R_i.hex()}")
-        self.logger(f"[Server] Decrypted A_i: {received_A_i.hex()}")
-        self.logger(f"[Server] Decrypted R_i: {received_R_i.hex()}")
-
-        if received_R_i != R_i:
-            self.logger("[Server] R_i mismatch. Authentication failed.")
+        # Validate T1 for freshness
+        if abs(int(time.time()) - T1) > 60:
+            self.logger("[Server] Validation failed: T1 is not fresh.")
             return None
 
-        # Generate S_i (response nonce) and compute response
-        S_i = os.urandom(16)
-        self.logger(f"[Server] Generated response nonce S_i: {S_i.hex()}")
+        # Compute response {T_i, T2}
+        T2 = int(time.time())
+        qi = os.urandom(16)
+        Qi = hashlib.sha256(f"{Ck.hex()}{qi.hex()}".encode()).digest()
+        si = bytes(a ^ b for a, b in zip(qi, Ck))
+        wi = hashlib.sha256(f"{Pid_i}{extracted_e_i.hex()}".encode()).digest()
 
-        # Encrypt response (S_i || N_i) to form R_e
+        # Store Qi in the server database
+        self.database[identifier]["Qi"] = Qi
+        self.logger(f"[Server] Stored Qi: {Qi.hex()} in database for identifier {identifier}")
+
         response_iv = os.urandom(16)
-        self.logger(f"[Server] Generated response IV: {response_iv.hex()}")
-        response_data = f"{S_i.hex()}{N_i.hex()}".encode('utf-8')
-        
+        Ti_data = f"{si.hex()}{wi.hex()}{T2}".encode('utf-8')
         padder = padding.PKCS7(128).padder()
-        padded_response = padder.update(response_data) + padder.finalize()
+        padded_Ti = padder.update(Ti_data) + padder.finalize()
 
         cipher = Cipher(algorithms.AES(session_key), modes.CBC(response_iv), backend=default_backend())
         encryptor = cipher.encryptor()
-        R_e = encryptor.update(padded_response) + encryptor.finalize()
+        Ti = encryptor.update(padded_Ti) + encryptor.finalize()
 
-        self.logger(f"[Server] Computed R_e: {R_e.hex()} with IV: {response_iv.hex()}")
+        self.logger(f"[Server] Computed Ti: {Ti.hex()}, T2: {T2}")
 
-        return S_i, R_e, response_iv
+        return Ti, T2, response_iv
