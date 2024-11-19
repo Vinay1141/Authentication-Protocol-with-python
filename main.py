@@ -9,7 +9,7 @@ class ProtocolApp:
         self.log_text = tk.Text(self.root, height=30, width=100)
         self.log_text.pack()
 
-        self.device = Device(self.log, "Device_001", "securepassword123")
+        self.device = Device(self.log, "d1", "1234")
         self.server = Server(self.log, "Server_001", "supersecretkey12")
 
         self.step_label = tk.Label(self.root, text="Step: Initialize", font=("Arial", 14))
@@ -93,10 +93,10 @@ class ProtocolApp:
                 return
 
             # Step 3: Device processes the server's response
-            T2, response_iv, encrypted_response = response
+            Ti, T2, response_iv = response
             self.log(f"[Server] Sent response T2: {T2} with IV: {response_iv.hex()}")
 
-            auth_status = self.device.process_server_response(encrypted_response, response_iv)
+            auth_status = self.device.process_server_response(Ti, T2, response_iv)
             if auth_status:
                 self.log("[Protocol] Authentication Successful!")
             else:

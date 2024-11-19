@@ -7,6 +7,7 @@ import time
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 
+
 class Device:
     def __init__(self, logger, device_id, password):
         self.device_id = device_id
@@ -25,7 +26,7 @@ class Device:
         self.identifier = hashlib.sha256(combined).hexdigest()
         self.logger(f"[Device] Generated identifier I_i: {self.identifier}")
         return self.identifier
-    
+
     def generate_identifier_new(self, id, password):
         combined = f"{id}{password}".encode('utf-8')
         I_i = hashlib.sha256(combined).hexdigest()
@@ -64,96 +65,66 @@ class Device:
         A_i = bytes(a ^ b for a, b in zip(A_prime_i, I_i))
 
         R_prime_i = self.stored_data["R'_i"]
-
         R_i = bytes(a ^ b for a, b in zip(R_prime_i, I_i))
         self.logger(f"[Device] Computed R_i from R'_i: {R_i.hex()}")
 
         Pid_i = self.stored_data["Pid_i"]
 
-        # Step 2: Compute N_i = ECC_{Pcs}(Pid_i || R_i)
+        # Step 2: Compute the shared secret and encode N_i as an uncompressed point
         ecc_input = f"{Pid_i}{R_i.hex()}".encode('utf-8')
         shared_secret = self.ecc_private_key.exchange(ec.ECDH(), server_public_key)
-        self.logger(f"[Device] Computed ECC(N_i): {shared_secret.hex()}")
+        self.logger(f"[Device] Computed ECC shared secret: {shared_secret.hex()}")
 
-        N_i = hashlib.sha256(f"{shared_secret.hex()}{ecc_input.decode()}".encode()).digest()
-        self.logger(f"[Device] Computed hashed N_i: {N_i.hex()}")
+        # Serialize the server's public key as N_i (uncompressed format)
+        N_i = server_public_key.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+        self.logger(f"[Device] Computed N_i (encoded as uncompressed point): {N_i.hex()}")
 
         # Step 3: Generate timestamp T_i
-        T_i = int(time.time())
-        self.logger(f"[Device] Generated timestamp T_i: {T_i}")
+        T_1 = int(time.time())
+        self.logger(f"[Device] Generated timestamp T_i: {T_1}")
 
         # Step 4: Compute E_i = ENC_{C_k}(e_i, T_i, A_i)
         e_i = os.urandom(16)
         iv = os.urandom(16)
-        cipher = Cipher(algorithms.AES(self.session_key), modes.CBC(iv), backend=default_backend())
+        if len(C_k) < 16:
+            C_k = hashlib.sha256(C_k).digest()[:16]
+        cipher = Cipher(algorithms.AES(C_k), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
-        data = f"{e_i.hex()}{T_i}{A_i.hex()}".encode('utf-8')
+        data = f"{e_i.hex()}{T_1}{A_i.hex()}".encode('utf-8')
         padder = padding.PKCS7(128).padder()
         padded_data = padder.update(data) + padder.finalize()
         E_i = encryptor.update(padded_data) + encryptor.finalize()
 
         self.logger(f"[Device] Computed E_i: {E_i.hex()} with IV: {iv.hex()}")
 
-        return N_i, T_i, E_i, iv
+        return N_i, T_1, E_i, iv
 
-    
     def process_server_response(self, Ti, T2, iv):
-        """Step 3: Decrypt T2 from the server and validate it."""
-        self.logger(f"[Device] Received response Ti: {Ti.hex()}, T2: {T2}, IV: {iv.hex()}")
-        
-        # Validate IV size
-        if len(iv) != 16:
-            raise ValueError(f"Invalid IV size: {len(iv)} bytes. Expected 16 bytes.")
-        
-        # Decrypt Ti using A_i
-        cipher = Cipher(algorithms.AES(self.session_key), modes.CBC(iv), backend=default_backend())
-        decryptor = cipher.decryptor()
+        self.logger(f"[Device] Received Ti: {Ti.hex()}, T2: {T2} with IV: {iv.hex()}")
 
-        try:
-            padded_data = decryptor.update(Ti) + decryptor.finalize()
-            unpadder = padding.PKCS7(128).unpadder()
-            decrypted_data = unpadder.update(padded_data) + unpadder.finalize()
-        except Exception as e:
-            self.logger(f"[Device] Error decrypting Ti: {e}")
-            return False
-
-        # Parse decrypted data
-        si = bytes.fromhex(decrypted_data[:32].decode())
-        wi_received = bytes.fromhex(decrypted_data[32:64].decode())
-        T2_received = int(decrypted_data[64:].decode())
-        self.logger(f"[Device] Decrypted si: {si.hex()}, wi: {wi_received.hex()}, T2: {T2_received}")
-
-        # Step 1: Validate T2 (freshness check)
-        if abs(int(time.time()) - T2_received) > 60:
-            self.logger("[Device] Validation failed: T2 is not fresh.")
-            return False
-        
-        # Step 2: Compute A_i from stored data
-        I_i = bytes.fromhex(self.identifier)  # Retrieve stored I_i
+        I_i = bytes.fromhex(self.identifier)
         A_prime_i = self.stored_data["A'_i"]
         A_i = bytes(a ^ b for a, b in zip(A_prime_i, I_i))
-        self.logger(f"[Device] Computed A_i: {A_i.hex()}")
         
-        # Step 3: Compute wi locally and compare
-        wi_computed = hashlib.sha256(f"{self.stored_data['Pid_i']}{self.e_i.hex()}".encode()).digest()
-        self.logger(f"[Device] Computed wi: {wi_computed.hex()}")
+        if abs(int(time.time()) - T2) > 60:
+            self.logger("[Server] Validation failed: T2 is not fresh.")
+            return None
+        T3 = int(time.time())
 
-        if wi_computed != wi_received:
-            self.logger("[Device] Validation failed: wi mismatch.")
-            return False
-        
-        # Step 4: Compute Qi = hash(A_i || Ck)
-        Ck = self.session_key
-        qi = bytes(a ^ b for a, b in zip(si, Ck))
-        Qi = hashlib.sha256(f"{Ck.hex()}{qi.hex()}".encode()).digest()
-        self.logger(f"[Device] Computed Qi: {Qi.hex()}")
+        cipher = Cipher(algorithms.AES(A_i), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        padded_ti = decryptor.update(Ti) + decryptor.finalize()
+        self.logger(f"[Server] {padded_ti}")
 
-        # Step 5: Derive final session key
-        R_prime_i = self.stored_data["R'_i"]
-        R_i = bytes(a ^ b for a, b in zip(R_prime_i, I_i))
-        session_key = hashlib.sha256(f"{self.e_i.hex()}{Ck.hex()}{Qi.hex()}{R_i.hex()}".encode()).digest()
-        self.logger(f"[Device] Derived session key: {session_key.hex()}")
+        unpadder = padding.PKCS7(128).unpadder()
 
-        self.logger("[Device] Session key successfully updated. Authentication complete.")
-        return True
+        decrypted_ti = unpadder.update(padded_ti) + unpadder.finalize()
+        self.logger(f"[Server] Decrypted T_i: {decrypted_ti.hex()}")
+
+
+
+        return T3
