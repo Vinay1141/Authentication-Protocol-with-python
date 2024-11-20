@@ -117,8 +117,10 @@ class Server:
             self.logger(f"[Server] Decrypted A'_i: {decrypted_data.hex()}")
             Pid_prime_i = decrypted_data[:16]
             E_prime_t = decrypted_data[16:]
-            self.logger(f"[Server] E*_t: {E_prime_t.hex()}, Pid*_i: {Pid_prime_i.hex()}")
-            self.logger(f"[Server] E_t: {E_t}, Pid_i: {Pid_i.hex()}")
+            
+            if not Pid_prime_i or not E_prime_t:
+                self.logger("[Server] Authentication failed: Pid_i and E_t are not verified.")
+                return None
 
             qi = os.urandom(16)
             Qi = hashlib.sha256(f"{decrypted_A_prime_i.hex()}{C_k.hex()}".encode()).digest()
