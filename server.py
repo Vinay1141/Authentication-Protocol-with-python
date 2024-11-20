@@ -24,7 +24,7 @@ class Server:
         Pid_i = hashlib.sha256(f"{I_i}{self.server_id}{r_cs.hex()}".encode('utf-8')).digest()[:16]
         Pid_i = bytes(a ^ b for a, b in zip(Pid_i, self.server_id.encode('utf-8')))
 
-        Et = int(time.time()) + 3600  # Expiration time
+        Et = int(time.time()) + 3600
 
         C_k = hashlib.sha256(f"{self.master_key.hex()}{Pid_i.hex()}{Et}{r_cs.hex()}".encode('utf-8')).digest()[:16]
         C_k = bytes(a ^ b for a, b in zip(C_k, self.server_id.encode('utf-8')))
