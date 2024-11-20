@@ -42,16 +42,13 @@ class Device:
         self.logger(" ")
         """Step 1: Start authentication by computing N_i and E_i."""
 
-        # Compute I*_i (New Identifier)
         I_i_new = self.generate_identifier_new(auth_id, auth_password)
         self.logger(f"[Device] I*_i (I_i_new): {I_i_new}")
 
-        # Ensure I*_i matches stored I_i
         if I_i_new != self.identifier:
             self.logger("[Device] Mismatch: I_i_new does not match stored I_i. Possible incorrect ID or password.")
             raise ValueError("Authentication failed: Incorrect ID or password.")
 
-        # Retrieve necessary stored values
         C_prime_k = self.stored_data["C'_k"]
         I_i = bytes.fromhex(self.identifier)
         C_k = bytes(a ^ b for a, b in zip(C_prime_k, I_i))  # Derive C_k
@@ -70,7 +67,6 @@ class Device:
         plaintext = Pid_i + R_i
         self.logger(f"[Device] Plaintext for ECC encryption: {plaintext.hex()}")
 
-        # Compute shared secret and N_i
         shared_secret = self.ecc_private_key.exchange(ec.ECDH(), server_public_key)
         self.logger(f"[Device] ECC shared secret: {shared_secret.hex()}")
         encryption_key = hashlib.sha256(shared_secret).digest()[:16]
@@ -86,19 +82,16 @@ class Device:
 
         N_i = encrypted_value
 
-        # Generate timestamp T_i
         T_i = int(time.time())
         self.logger(f"[Device] Generated timestamp T_i: {T_i}")
         self.logger(f"[Device] C_k: {C_k.hex()}, Length: {len(C_k)}")
         self.stored_data.__setitem__('C_k', C_k)
 
-        # Compute E_i = ENC_{C_k}(e_i || T_i || A_i)
-        e_i = os.urandom(16)  # Random nonce
+        e_i = os.urandom(16) 
         self.stored_data.__setitem__('e_i', e_i)
         cipher = Cipher(algorithms.AES(C_k), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
-        # Prepare data
         e_i_data = e_i + T_i.to_bytes(8, "big") + A_i
         padder = padding.PKCS7(128).padder()
         padded_e_i_data = padder.update(e_i_data) + padder.finalize()
@@ -112,6 +105,10 @@ class Device:
 
     def process_server_response(self, Ti, T2, response_iv):
         self.logger(" ")
+        T3 = int(time.time())
+        if abs(T3 - T2) > 60:
+            self.logger("[Device] Validation failed: T2 is not fresh.")
+            return False
         Ai = self.stored_data["A_i"]
         self.logger(f"[Device] Ai: {Ai.hex()} with IV: {response_iv.hex()}")
 
@@ -140,7 +137,8 @@ class Device:
         e_i = self.stored_data["e_i"]
         w_dash_i = hashlib.sha256(f"{Pid_i.hex()}{e_i.hex()}".encode()).digest()
 
-        self.logger(f"[Device] w'_i: {w_dash_i.hex()}")
+        self.logger(f"[Device] w'_i: {w_dash_i.hex()} w_i: {wi}")
+        self.logger(f"[Device] T'_2: {T2_dash.hex()} T_2: {T2}")
 
         C_k = self.stored_data["C_k"]
         if not isinstance(si, bytes):

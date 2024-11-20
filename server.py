@@ -50,6 +50,7 @@ class Server:
         R_prime_i = bytes(a ^ b for a, b in zip(R_i, bytes.fromhex(I_i)))
 
         self.database[Pid_i.hex()] = {"R_i": R_i, "Et": Et, "Session_Key": session_key, "Pid_i": Pid_i}
+        self.logger(f"[Server] Database: {self.database}")
         self.logger(f"[Server] Registered device: Pid_i={Pid_i.hex()}, R_i={R_i.hex()}")
 
         self.logger(" ")
@@ -57,6 +58,10 @@ class Server:
 
     def process_auth_request(self, device_public_key, N_i, T1, E_i, iv):
         self.logger(" ")
+        T2 = int(time.time())
+        if abs(T2 - T1) > 60:
+            self.logger("[Device] Validation failed: T2 is not fresh.")
+            return False
         shared_secret = self.ecc_private_key.exchange(ec.ECDH(), device_public_key)
         self.logger(f"[Device] ECC shared secret: {shared_secret.hex()}")
 
@@ -72,6 +77,9 @@ class Server:
         Pid_i = plaintext[:16]
         R_i = plaintext[16:]
         self.logger(f"[Server] Decrypted Pid_i: {Pid_i.hex()}, R_i: {R_i.hex()}")
+
+
+        self.logger(f"[Server] Decrypted Pid_i and R_i are verified.")
 
         if Pid_i.hex() not in self.database:
             self.logger("[Server] Authentication failed: Device not registered.")
@@ -112,11 +120,10 @@ class Server:
             self.logger(f"[Server] E*_t: {E_prime_t.hex()}, Pid*_i: {Pid_prime_i.hex()}")
             self.logger(f"[Server] E_t: {E_t}, Pid_i: {Pid_i.hex()}")
 
-            T2 = int(time.time())
             qi = os.urandom(16)
             Qi = hashlib.sha256(f"{decrypted_A_prime_i.hex()}{C_k.hex()}".encode()).digest()
             si = bytes(a ^ b for a, b in zip(qi, C_k))
-            wi = hashlib.sha256(f"{Pid_prime_i.hex()}{decrypted_e_prime_i.hex()}".encode()).digest()
+            wi = hashlib.sha256(f"{Pid_i.hex()}{decrypted_e_prime_i.hex()}".encode()).digest()
             self.logger(f"[Server] wi: {wi.hex()}")
             self.logger(f"[Server] si : {si.hex()}, qi : {qi.hex()}")
 
@@ -150,7 +157,10 @@ class Server:
 
     def final_check(self, MN_i, Pid_i, T3):
         self.logger(" ")
-        T4 = int(time.time())
+        T4 = int(time.time())   
+        if abs(T4 - T3) > 60:
+            self.logger("[Device] Validation failed: T2 is not fresh.")
+            return False
         stored_data = self.database[Pid_i.hex()]
         R_i = stored_data["R_i"]
         C_k = stored_data["C_k"]

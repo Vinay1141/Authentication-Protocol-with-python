@@ -66,7 +66,6 @@ class ProtocolApp:
         self.log("[Protocol] Starting Device Registration...")
         self.device = Device(self.log, device_id, password)
 
-        # Device generates identifier
         I_i = self.device.generate_identifier()
         self.log(f"[Device] Generated Identifier: {I_i}")
 
@@ -100,14 +99,14 @@ class ProtocolApp:
             # Step 2: Server processes the authentication request
             device_public_key = self.device.ecc_public_key
             response = self.server.process_auth_request(device_public_key, Ni, T1, Ei, iv)
-            self.log(f"[Protocol] {response}")
+            # self.log(f"[Protocol] {response}")
             if not response:
                 self.log("[Server] Authentication failed during T1 validation.")
                 return
 
             # Step 3: Device processes the server's response
             Ti, T2, response_iv = response
-            self.log(f"[Server] Sent response T2: {T2} with IV: {response_iv.hex()}")
+            self.log(f"[Server] Sent response Ti: {Ti.hex()} T2: {T2} with IV: {response_iv.hex()}")
 
             MN_i, Pid_i, T3 = self.device.process_server_response(Ti, T2, response_iv)
             if MN_i:
